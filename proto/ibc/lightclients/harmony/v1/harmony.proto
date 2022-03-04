@@ -1,0 +1,34 @@
+syntax = "proto3";
+package ibc.lightclients.harmony.v1;
+
+import "gogoproto/gogo.proto";
+import "ibc/core/client/v1/client.proto";
+
+option go_package = "github.com/datachainlab/ibc-harmony-client/modules/light-clients/harmony/types";
+option (gogoproto.goproto_getters_all)  = false;
+
+message ClientState {
+  uint32 shard_id = 1;
+  bytes contract_address = 2;
+  uint64 latest_epoch = 3;
+  bytes latest_committee = 4;
+  ibc.core.client.v1.Height latest_height = 5; // it indicates a height for the shard chain
+}
+
+message ConsensusState {
+  uint64 timestamp = 1;
+  bytes root = 2;
+}
+
+message EpochState {
+  bytes committee = 1;
+}
+
+message Header {
+  bytes beacon_header = 1;
+  bytes shard_header = 2;
+  bytes signature = 3;
+  bytes bitmap = 4;
+  uint32 cross_link_index = 5;
+  bytes account_proof = 6;
+}
