@@ -11,6 +11,9 @@ require (
 	github.com/cosmos/ibc-go v1.0.0-beta1
 	github.com/ethereum/go-ethereum v1.9.25
 	github.com/gogo/protobuf v1.3.3
+	github.com/gorilla/mux v1.8.0
+	github.com/grpc-ecosystem/grpc-gateway v1.16.0
 	github.com/harmony-one/bls v0.0.6
 	github.com/harmony-one/harmony v1.10.2
+	github.com/spf13/cobra v1.1.3
 )
