@@ -32,3 +32,9 @@ message Header {
   uint32 cross_link_index = 5;
   bytes account_proof = 6;
 }
+
+message Misbehaviour {
+  string client_id = 1 [(gogoproto.moretags) = "yaml:\"client_id\""];
+  Header header_1  = 2 [(gogoproto.customname) = "Header1", (gogoproto.moretags) = "yaml:\"header_1\""];
+  Header header_2  = 3 [(gogoproto.customname) = "Header2", (gogoproto.moretags) = "yaml:\"header_2\""];
+}
