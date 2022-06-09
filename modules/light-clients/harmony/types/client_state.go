@@ -1,21 +1,34 @@
 package types
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	time "time"
 
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	clienttypes "github.com/cosmos/ibc-go/modules/core/02-client/types"
+	connectiontypes "github.com/cosmos/ibc-go/modules/core/03-connection/types"
+	channeltypes "github.com/cosmos/ibc-go/modules/core/04-channel/types"
+	commitmenttypes "github.com/cosmos/ibc-go/modules/core/23-commitment/types"
 	"github.com/cosmos/ibc-go/modules/core/exported"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
+	bls_core "github.com/harmony-one/bls/ffi/go/bls"
 	v3 "github.com/harmony-one/harmony/block/v3"
-	"github.com/harmony-one/harmony/consensus/signature"
+	"github.com/harmony-one/harmony/consensus/quorum"
 	hmytypes "github.com/harmony-one/harmony/core/types"
 	"github.com/harmony-one/harmony/crypto/bls"
 	"github.com/harmony-one/harmony/shard"
 )
+
+// We make an presumption that it is after StakingEpoch.
+const isStaking = true
 
 var _ exported.ClientState = (*ClientState)(nil)
 
@@ -33,7 +46,13 @@ func (cs ClientState) GetLatestHeight() exported.Height {
 
 func (cs ClientState) Validate() error {
 	if len(cs.ContractAddress) == 0 {
-		return fmt.Errorf("ContractAddress is empty")
+		return fmt.Errorf("ContractAddress cannot be empty")
+	}
+	if len(cs.LatestCommittee) == 0 {
+		return fmt.Errorf("LatestCommittee cannot be empty")
+	}
+	if cs.LatestHeight.RevisionHeight == 0 {
+		return errors.New("LatestHeight RevisionHeight cannot be 0")
 	}
 	return nil
 }
@@ -50,7 +69,7 @@ func (cs ClientState) Initialize(ctx sdk.Context, cdc codec.BinaryCodec, store s
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidConsensus, "invalid initial consensus state. expected type: %T, got: %T",
 			&ConsensusState{}, consState)
 	}
-	// TODO set metada for initial consensus state
+	// TODO set metadata for initial consensus state
 	SetEpochState(store, cdc, &EpochState{Committee: cs.LatestCommittee}, cs.LatestEpoch)
 	return nil
 }
@@ -58,8 +77,27 @@ func (cs ClientState) Initialize(ctx sdk.Context, cdc codec.BinaryCodec, store s
 // Status function
 // Clients must return their status. Only Active clients are allowed to process packets.
 func (cs ClientState) Status(ctx sdk.Context, clientStore sdk.KVStore, cdc codec.BinaryCodec) exported.Status {
-	// TODO add frozen status support
+	if cs.Frozen {
+		return exported.Frozen
+	}
+	// get latest consensus state from clientStore to check for expiry
+	consState, err := GetConsensusState(clientStore, cdc, cs.GetLatestHeight())
+	if err != nil {
+		return exported.Unknown
+	}
+
+	if cs.IsExpired(timestampToUnix(consState.Timestamp), ctx.BlockTime()) {
+		return exported.Expired
+	}
+
 	return exported.Active
+}
+
+// IsExpired returns whether or not the client has passed the trusting period since the last
+// update (in which case no headers are considered valid).
+func (cs ClientState) IsExpired(latestTimestamp, now time.Time) bool {
+	expirationTime := latestTimestamp.Add(cs.TrustingPeriod)
+	return !expirationTime.After(now)
 }
 
 // Genesis function
@@ -78,96 +116,175 @@ func (cs ClientState) CheckHeaderAndUpdateState(
 			clienttypes.ErrInvalidHeader, "expected type %T, got %T", &Header{}, header,
 		)
 	}
-	beaconHeader, err := rlpDecodeHeader(h.BeaconHeader)
-	if err != nil {
-		return nil, nil, err
-	}
-	var targetHeader *v3.Header
-	if cs.ShardId == 0 {
-		targetHeader = beaconHeader
-	} else {
-		shardHeader, err := rlpDecodeHeader(h.ShardHeader)
-		if err != nil {
+	// Update epoch(s) except for the last beacon header
+	bhLen := len(h.BeaconHeaders)
+	for _, bh := range h.BeaconHeaders[:bhLen-1] {
+		if err := cs.updateEpochOnly(ctx, cdc, clientStore, &bh); err != nil {
 			return nil, nil, err
 		}
-		// verify the existence of crossLink in the beacon header
-		var crossLinks hmytypes.CrossLinks
-		if err := rlp.DecodeBytes(beaconHeader.CrossLinks(), &crossLinks); err != nil {
-			return nil, nil, err
-		}
-		if len(crossLinks) <= int(h.CrossLinkIndex) {
-			return nil, nil, fmt.Errorf("invalid crossLink index: %v < %v", len(crossLinks), h.CrossLinkIndex)
-		}
-		if shardHeader.Hash() != crossLinks[h.CrossLinkIndex].HashF {
-			return nil, nil, fmt.Errorf("unexpected shard header: expected=%v actual=%v", shardHeader.Hash().Hex(), crossLinks[h.CrossLinkIndex].HashF.Hex())
-		}
-		targetHeader = shardHeader
 	}
-	if l := len(beaconHeader.ShardState()); l > 0 {
-		// epoch change
-		return cs.updateEpoch(ctx, cdc, clientStore, h, beaconHeader, targetHeader)
-	} else {
-		// only height change
-		return cs.updateHeight(ctx, cdc, clientStore, h, beaconHeader, targetHeader)
-	}
+	return cs.update(ctx, cdc, clientStore, h, &h.BeaconHeaders[bhLen-1])
 }
 
-func (cs ClientState) CheckMisbehaviourAndUpdateState(_ sdk.Context, _ codec.BinaryCodec, _ sdk.KVStore, _ exported.Misbehaviour) (exported.ClientState, error) {
-	panic("not implemented") // TODO: Implement
-}
-
+// Future work is needed
 func (cs ClientState) CheckSubstituteAndUpdateState(ctx sdk.Context, cdc codec.BinaryCodec, subjectClientStore sdk.KVStore, substituteClientStore sdk.KVStore, substituteClient exported.ClientState) (exported.ClientState, error) {
-	panic("not implemented") // TODO: Implement
+	return nil, sdkerrors.Wrapf(
+		clienttypes.ErrUpdateClientFailed,
+		"harmony client is not allowed to updated with a proposal",
+	)
 }
 
-// Upgrade functions
-// NOTE: proof heights are not included as upgrade to a new revision is expected to pass only on the last
-// height committed by the current revision. Clients are responsible for ensuring that the planned last
-// height of the current revision is somehow encoded in the proof verification process.
-// This is to ensure that no premature upgrades occur, since upgrade plans committed to by the counterparty
-// may be cancelled or modified before the last planned height.
+// Future work is needed
 func (cs ClientState) VerifyUpgradeAndUpdateState(ctx sdk.Context, cdc codec.BinaryCodec, store sdk.KVStore, newClient exported.ClientState, newConsState exported.ConsensusState, proofUpgradeClient []byte, proofUpgradeConsState []byte) (exported.ClientState, exported.ConsensusState, error) {
-	panic("not implemented") // TODO: Implement
+	return nil, nil, sdkerrors.Wrap(clienttypes.ErrInvalidUpgradeClient, "cannot upgrade harmony client")
 }
 
 // Utility function that zeroes out any client customizable fields in client state
 // Ledger enforced fields are maintained while all custom fields are zero values
 // Used to verify upgrades
 func (cs ClientState) ZeroCustomFields() exported.ClientState {
-	panic("not implemented") // TODO: Implement
+	return &ClientState{
+		ShardId:         cs.ShardId,
+		ContractAddress: cs.ContractAddress,
+		LatestEpoch:     cs.LatestEpoch,
+		LatestCommittee: cs.LatestCommittee,
+		LatestHeight:    cs.LatestHeight,
+	}
 }
 
 // State verification functions
 func (cs ClientState) VerifyClientState(store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, prefix exported.Prefix, counterpartyClientIdentifier string, proof []byte, clientState exported.ClientState) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, provingConsensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+
+	root := common.BytesToHash(provingConsensusState.Root)
+	slot, err := ClientStateCommitmentSlot(counterpartyClientIdentifier)
+	if err != nil {
+		return err
+	}
+
+	if clientState == nil {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidClient, "client state cannot be empty")
+	}
+
+	bz, err := cdc.MarshalInterface(clientState)
+	if err != nil {
+		return err
+	}
+
+	return VerifyStorageProof(root, slot, crypto.Keccak256(bz), merkleProof)
 }
 
 func (cs ClientState) VerifyClientConsensusState(store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, counterpartyClientIdentifier string, consensusHeight exported.Height, prefix exported.Prefix, proof []byte, consensusState exported.ConsensusState) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, provingConsensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+
+	root := common.BytesToHash(provingConsensusState.Root)
+	slot, err := ConsensusStateCommitmentSlot(counterpartyClientIdentifier, consensusHeight.GetRevisionHeight())
+	if err != nil {
+		return err
+	}
+
+	if consensusState == nil {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidConsensus, "consensus state cannot be empty")
+	}
+
+	bz, err := cdc.MarshalInterface(consensusState)
+	if err != nil {
+		return err
+	}
+
+	return VerifyStorageProof(root, slot, crypto.Keccak256(bz), merkleProof)
 }
 
 func (cs ClientState) VerifyConnectionState(store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, prefix exported.Prefix, proof []byte, connectionID string, connectionEnd exported.ConnectionI) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := ConnectionCommitmentSlot(connectionID)
+	if err != nil {
+		return err
+	}
+
+	connection, ok := connectionEnd.(connectiontypes.ConnectionEnd)
+	if !ok {
+		return sdkerrors.Wrapf(sdkerrors.ErrInvalidType, "invalid connection type %T", connectionEnd)
+	}
+
+	bz, err := cdc.Marshal(&connection)
+	if err != nil {
+		return err
+	}
+
+	return VerifyStorageProof(root, slot, crypto.Keccak256(bz), merkleProof)
 }
 
 func (cs ClientState) VerifyChannelState(store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, prefix exported.Prefix, proof []byte, portID string, channelID string, channel exported.ChannelI) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := ChannelCommitmentSlot(portID, channelID)
+	if err != nil {
+		return err
+	}
+
+	channelEnd, ok := channel.(channeltypes.Channel)
+	if !ok {
+		return sdkerrors.Wrapf(sdkerrors.ErrInvalidType, "invalid channel type %T", channel)
+	}
+
+	bz, err := cdc.Marshal(&channelEnd)
+	if err != nil {
+		return err
+	}
+
+	return VerifyStorageProof(root, slot, crypto.Keccak256(bz), merkleProof)
 }
 
 func (cs ClientState) VerifyPacketCommitment(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, sequence uint64, commitmentBytes []byte) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := PacketCommitmentSlot(portID, channelID, sequence)
+	if err != nil {
+		return err
+	}
+
+	return VerifyStorageProof(root, slot, commitmentBytes, merkleProof)
 }
 
 func (cs ClientState) VerifyPacketAcknowledgement(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, sequence uint64, acknowledgement []byte) error {
-	panic("not implemented") // TODO: Implement
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := PacketAcknowledgementCommitmentSlot(portID, channelID, sequence)
+	if err != nil {
+		return err
+	}
+
+	v := sha256.Sum256(acknowledgement)
+	return VerifyStorageProof(root, slot, v[:], merkleProof)
 }
 
 func (cs ClientState) VerifyPacketReceiptAbsence(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, sequence uint64) error {
-	panic("not implemented") // TODO: Implement
+	return sdkerrors.Wrap(clienttypes.ErrFailedPacketReceiptVerification, "not supported")
 }
 
 func (cs ClientState) VerifyNextSequenceRecv(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, nextSequenceRecv uint64) error {
-	panic("not implemented") // TODO: Implement
+	return sdkerrors.Wrap(clienttypes.ErrFailedNextSeqRecvVerification, "not supported")
 }
 
 func (cs ClientState) GetCommittee() *shard.Committee {
@@ -186,21 +303,72 @@ func (cs *ClientState) SetCommittee(committee *shard.Committee) {
 	cs.LatestCommittee = bz
 }
 
-func (cs ClientState) updateHeight(
+func (cs ClientState) updateEpochOnly(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
-	header *Header,
-	beaconHeader *v3.Header,
-	targetHeader *v3.Header,
-) (exported.ClientState, exported.ConsensusState, error) {
-	panic("not implemented") // TODO: Implement
+	beacon *BeaconHeader,
+) error {
+	beaconHeader, err := rlpDecodeHeader(beacon.Header)
+	if err != nil {
+		return err
+	}
+	epoch := beaconHeader.Epoch().Uint64()
+	if cs.LatestEpoch != epoch {
+		return sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader, "invalid beacon epoch %d: expected: %d", epoch, cs.LatestEpoch,
+		)
+	}
+	epochState, err := GetEpochState(clientStore, cdc, epoch)
+	if err != nil {
+		return err
+	}
+	committee := epochState.GetCommittee()
+	if err := cs.verifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
+		return err
+	}
+
+	if len(beaconHeader.ShardState()) == 0 {
+		return sdkerrors.Wrap(
+			clienttypes.ErrInvalidHeader, "beacon headers except the last one must have shard state")
+	}
+	var shardState shard.State
+	if err := rlp.DecodeBytes(beaconHeader.ShardState(), &shardState); err != nil {
+		return err
+	}
+	newCommitee, ok := lookupBeaconCommittee(shardState.Shards)
+	if !ok {
+		return sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader, "shard %v not found", cs.ShardId)
+	}
+	cs.LatestEpoch += 1
+	cs.SetCommittee(newCommitee)
+	SetEpochState(clientStore, cdc, &EpochState{Committee: cs.LatestCommittee}, cs.LatestEpoch)
+	return nil
 }
 
-func (cs ClientState) updateEpoch(
+func (cs *ClientState) update(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	header *Header,
-	beaconHeader *v3.Header,
-	targetHeader *v3.Header,
+	beacon *BeaconHeader,
 ) (exported.ClientState, exported.ConsensusState, error) {
+	beaconHeader, err := rlpDecodeHeader(beacon.Header)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var targetHeader *v3.Header
+	if len(header.ShardHeader) > 0 {
+		shardHeader, err := rlpDecodeHeader(header.ShardHeader)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := checkCrossLink(shardHeader, beaconHeader, header.CrossLinkIndex); err != nil {
+			return nil, nil, err
+		}
+		targetHeader = shardHeader
+	} else {
+		targetHeader = beaconHeader
+	}
+
 	proof, err := header.GetAccountProof()
 	if err != nil {
 		return nil, nil, err
@@ -213,53 +381,176 @@ func (cs ClientState) updateEpoch(
 	if err != nil {
 		return nil, nil, err
 	}
-	epochState, err := GetEpochState(clientStore, cdc, beaconHeader.Epoch().Uint64())
+
+	epoch := beaconHeader.Epoch().Uint64()
+	if cs.LatestEpoch != epoch {
+		return nil, nil, sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader, "invalid beacon epoch %d: expected: %d", epoch, cs.LatestEpoch)
+	}
+	epochState, err := GetEpochState(clientStore, cdc, epoch)
 	if err != nil {
 		return nil, nil, err
 	}
-	keys, err := epochState.GetCommittee().BLSPublicKeys()
-	if err != nil {
+	committee := epochState.GetCommittee()
+	// Verify the sig is sufficient by the beacon committee of the current epoch
+	if err := cs.verifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
 		return nil, nil, err
 	}
-	mask, err := bls.NewMask(keys, nil)
-	if err != nil {
-		return nil, nil, err
+
+	// If shard state exists, the beacon header is the last header of this epoch.
+	// Update committee to accept the next epoch's header
+	if len(beaconHeader.ShardState()) > 0 {
+		var shardState shard.State
+		if err := rlp.DecodeBytes(beaconHeader.ShardState(), &shardState); err != nil {
+			return nil, nil, err
+		}
+		newCommitee, ok := lookupBeaconCommittee(shardState.Shards)
+		if !ok {
+			return nil, nil, sdkerrors.Wrapf(clienttypes.ErrInvalidHeader, "shard %v not found", cs.ShardId)
+		}
+		cs.LatestEpoch += 1
+		cs.SetCommittee(newCommitee)
+		SetEpochState(clientStore, cdc, &EpochState{Committee: cs.LatestCommittee}, cs.LatestEpoch)
 	}
-	if err := mask.SetMask(header.Bitmap); err != nil {
-		return nil, nil, err
+
+	height := clienttypes.Height{
+		RevisionNumber: cs.LatestHeight.RevisionNumber,
+		RevisionHeight: targetHeader.Number().Uint64(),
 	}
-	aggSig, err := header.GetSignature()
-	if err != nil {
-		return nil, nil, err
+	if !cs.LatestHeight.GTE(height) {
+		cs.LatestHeight = height
 	}
-	// TODO set signatureSignReader
-	payload := signature.ConstructCommitPayload(nil, beaconHeader.Epoch(), beaconHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
-	if !aggSig.VerifyHash(mask.AggregatePublic, payload) {
-		return nil, nil, fmt.Errorf("failed to verify the multi signature")
-	}
-	var shardState shard.State
-	if err := rlp.DecodeBytes(beaconHeader.ShardState(), &shardState); err != nil {
-		return nil, nil, err
-	}
-	commitee, ok := lookupCommitteeByID(shardState.Shards, cs.ShardId)
-	if !ok {
-		return nil, nil, fmt.Errorf("shard %v not found", cs.ShardId)
-	}
-	cs.LatestEpoch += 1
-	cs.LatestHeight = &clienttypes.Height{RevisionNumber: cs.LatestHeight.RevisionNumber, RevisionHeight: targetHeader.Number().Uint64()}
-	cs.SetCommittee(commitee)
-	SetEpochState(clientStore, cdc, &EpochState{Committee: cs.LatestCommittee}, cs.LatestEpoch)
-	return &cs, &ConsensusState{
-		Timestamp: beaconHeader.Time().Uint64(),
+	return cs, &ConsensusState{
+		Timestamp: targetHeader.Time().Uint64(),
 		Root:      storageRoot,
 	}, nil
 }
 
-func lookupCommitteeByID(shards []shard.Committee, targetID uint32) (*shard.Committee, bool) {
+func (cs ClientState) verifyCommitSig(
+	beaconHeader *v3.Header,
+	committee *shard.Committee,
+	commitSig, commitBitmap []byte,
+) error {
+	if cs.LatestEpoch != beaconHeader.Epoch().Uint64() {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidHeader, "invalid epoch")
+	}
+	return verifyCommitSig(beaconHeader, committee, commitBitmap, commitSig)
+}
+
+func verifyCommitSig(
+	beaconHeader *v3.Header,
+	committee *shard.Committee,
+	commitSig, commitBitmap []byte,
+) error {
+	keys, err := committee.BLSPublicKeys()
+	if err != nil {
+		return err
+	}
+	mask, err := bls.NewMask(keys, nil)
+	if err != nil {
+		return err
+	}
+	if err := mask.SetMask(commitBitmap); err != nil {
+		return err
+	}
+	epoch := beaconHeader.Epoch()
+	qrVerifier, err := quorum.NewVerifier(committee, epoch, isStaking)
+	if err != nil {
+		return err
+	}
+	if !qrVerifier.IsQuorumAchievedByMask(mask) {
+		return sdkerrors.Wrap(ErrInvalidSignature, "not enough signature collected")
+	}
+	aggSig, err := decodeSignature(commitSig[:])
+	if err != nil {
+		return err
+	}
+	payload := ConstructCommitPayload(epoch, beaconHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
+	if !aggSig.VerifyHash(mask.AggregatePublic, payload) {
+		return sdkerrors.Wrap(ErrInvalidSignature, "failed to verify the multi signature")
+	}
+	return nil
+}
+
+func lookupBeaconCommittee(shards []shard.Committee) (*shard.Committee, bool) {
 	for _, shard := range shards {
-		if shard.ShardID == targetID {
+		if shard.ShardID == 0 {
 			return &shard, true
 		}
 	}
 	return nil, false
+}
+
+// produceVerificationArgs perfoms the basic checks on the arguments that are
+// shared between the verification functions and returns the unmarshalled
+// merkle proof, the consensus state and an error if one occurred.
+func produceVerificationArgs(
+	store sdk.KVStore,
+	cdc codec.BinaryCodec,
+	cs ClientState,
+	height exported.Height,
+	prefix exported.Prefix,
+	proof []byte,
+) (merkleProof [][]byte, consensusState *ConsensusState, err error) {
+	if cs.GetLatestHeight().LT(height) {
+		return nil, nil, sdkerrors.Wrapf(
+			sdkerrors.ErrInvalidHeight,
+			"client state height < proof height (%d < %d), please ensure the client has been updated", cs.GetLatestHeight(), height)
+	}
+
+	if prefix == nil {
+		return nil, nil, sdkerrors.Wrap(commitmenttypes.ErrInvalidPrefix, "prefix cannot be empty")
+	}
+
+	_, ok := prefix.(*commitmenttypes.MerklePrefix)
+	if !ok {
+		return nil, nil, sdkerrors.Wrapf(commitmenttypes.ErrInvalidPrefix, "invalid prefix type %T, expected *MerklePrefix", prefix)
+	}
+
+	if proof == nil {
+		return nil, nil, sdkerrors.Wrap(commitmenttypes.ErrInvalidProof, "proof cannot be empty")
+	}
+
+	merkleProof, err = decodeRLP(proof)
+	if err != nil {
+		return nil, nil, sdkerrors.Wrap(commitmenttypes.ErrInvalidProof, "failed to unmarshal proof into commitment merkle proof")
+	}
+
+	consensusState, err = GetConsensusState(store, cdc, height)
+	if err != nil {
+		return nil, nil, sdkerrors.Wrap(err, "please ensure the proof was constructed against a height that exists on the client")
+	}
+
+	return merkleProof, consensusState, nil
+}
+
+func checkCrossLink(shardHeader, beaconHeader *v3.Header, crossLinkIndex uint32) error {
+	// verify the existence of crossLink in the beacon header
+	var crossLinks hmytypes.CrossLinks
+	if err := rlp.DecodeBytes(beaconHeader.CrossLinks(), &crossLinks); err != nil {
+		return err
+	}
+	if len(crossLinks) <= int(crossLinkIndex) {
+		return sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader,
+			"invalid crossLink index: %v < %v", len(crossLinks), crossLinkIndex)
+	}
+	if !bytes.Equal(shardHeader.Hash().Bytes(), crossLinks[crossLinkIndex].HashF[:]) {
+		return sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader,
+			"unexpected shard header: expected=%v actual=%v", shardHeader.Hash().Hex(), crossLinks[crossLinkIndex].HashF.Hex())
+	}
+	return nil
+}
+
+func decodeSignature(sig []byte) (*bls_core.Sign, error) {
+	var sign bls_core.Sign
+	if err := sign.Deserialize(sig); err != nil {
+		return nil, err
+	}
+	return &sign, nil
+}
+
+func timestampToUnix(timestamp uint64) time.Time {
+	return time.Unix(int64(timestamp), 0)
 }

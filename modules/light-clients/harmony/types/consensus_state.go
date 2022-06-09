@@ -1,6 +1,8 @@
 package types
 
 import (
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	clienttypes "github.com/cosmos/ibc-go/modules/core/02-client/types"
 	"github.com/cosmos/ibc-go/modules/core/exported"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/harmony-one/harmony/shard"
@@ -18,10 +20,16 @@ func (cs ConsensusState) GetRoot() exported.Root {
 
 // GetTimestamp returns the timestamp (in nanoseconds) of the consensus state
 func (cs ConsensusState) GetTimestamp() uint64 {
-	panic("not implemented") // TODO: Implement
+	return cs.Timestamp
 }
 
 func (cs ConsensusState) ValidateBasic() error {
+	if len(cs.Root) == 0 {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidConsensus, "root cannot be empty")
+	}
+	if cs.Timestamp == 0 {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidConsensus, "timestamp cannot be 0")
+	}
 	return nil
 }
 

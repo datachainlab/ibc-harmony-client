@@ -18,4 +18,5 @@ require (
 	github.com/harmony-one/bls v0.0.6
 	github.com/harmony-one/harmony v1.10.3-0.20220129011036-4ea9072e5eda
 	github.com/spf13/cobra v1.1.3
+	google.golang.org/protobuf v1.26.0
 )
