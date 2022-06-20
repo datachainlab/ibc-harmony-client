@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	bls_core "github.com/harmony-one/bls/ffi/go/bls"
+	"github.com/harmony-one/harmony/block"
 	v3 "github.com/harmony-one/harmony/block/v3"
 	"github.com/harmony-one/harmony/consensus/quorum"
 	hmytypes "github.com/harmony-one/harmony/core/types"
@@ -303,7 +304,7 @@ func (cs *ClientState) SetCommittee(committee *shard.Committee) {
 	cs.LatestCommittee = bz
 }
 
-func (cs ClientState) updateEpochOnly(
+func (cs *ClientState) updateEpochOnly(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	beacon *BeaconHeader,
 ) error {
@@ -312,9 +313,9 @@ func (cs ClientState) updateEpochOnly(
 		return err
 	}
 	epoch := beaconHeader.Epoch().Uint64()
-	if cs.LatestEpoch != epoch {
+	if epoch < cs.LatestEpoch {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidHeader, "invalid beacon epoch %d: expected: %d", epoch, cs.LatestEpoch,
+			clienttypes.ErrInvalidHeader, "beacon epoch %d < latest epoch %d", epoch, cs.LatestEpoch,
 		)
 	}
 	epochState, err := GetEpochState(clientStore, cdc, epoch)
@@ -322,7 +323,7 @@ func (cs ClientState) updateEpochOnly(
 		return err
 	}
 	committee := epochState.GetCommittee()
-	if err := cs.verifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
 		return err
 	}
 
@@ -393,7 +394,7 @@ func (cs *ClientState) update(
 	}
 	committee := epochState.GetCommittee()
 	// Verify the sig is sufficient by the beacon committee of the current epoch
-	if err := cs.verifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
 		return nil, nil, err
 	}
 
@@ -426,18 +427,7 @@ func (cs *ClientState) update(
 	}, nil
 }
 
-func (cs ClientState) verifyCommitSig(
-	beaconHeader *v3.Header,
-	committee *shard.Committee,
-	commitSig, commitBitmap []byte,
-) error {
-	if cs.LatestEpoch != beaconHeader.Epoch().Uint64() {
-		return sdkerrors.Wrap(clienttypes.ErrInvalidHeader, "invalid epoch")
-	}
-	return verifyCommitSig(beaconHeader, committee, commitBitmap, commitSig)
-}
-
-func verifyCommitSig(
+func VerifyCommitSig(
 	beaconHeader *v3.Header,
 	committee *shard.Committee,
 	commitSig, commitBitmap []byte,
@@ -465,7 +455,8 @@ func verifyCommitSig(
 	if err != nil {
 		return err
 	}
-	payload := ConstructCommitPayload(epoch, beaconHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
+	blockHeader := block.Header{Header: beaconHeader}
+	payload := ConstructCommitPayload(epoch, blockHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
 	if !aggSig.VerifyHash(mask.AggregatePublic, payload) {
 		return sdkerrors.Wrap(ErrInvalidSignature, "failed to verify the multi signature")
 	}
@@ -524,21 +515,22 @@ func produceVerificationArgs(
 	return merkleProof, consensusState, nil
 }
 
+// verify crossLink in the beacon header with matching hash
 func checkCrossLink(shardHeader, beaconHeader *v3.Header, crossLinkIndex uint32) error {
-	// verify the existence of crossLink in the beacon header
 	var crossLinks hmytypes.CrossLinks
 	if err := rlp.DecodeBytes(beaconHeader.CrossLinks(), &crossLinks); err != nil {
 		return err
 	}
-	if len(crossLinks) <= int(crossLinkIndex) {
+	if int(crossLinkIndex) >= len(crossLinks) {
 		return sdkerrors.Wrapf(
 			clienttypes.ErrInvalidHeader,
-			"invalid crossLink index: %v < %v", len(crossLinks), crossLinkIndex)
+			"invalid crosslink: index %d is greater than or equal to length %d", crossLinkIndex, len(crossLinks))
 	}
-	if !bytes.Equal(shardHeader.Hash().Bytes(), crossLinks[crossLinkIndex].HashF[:]) {
+	shardBlockHeader := block.Header{Header: shardHeader}
+	if !bytes.Equal(shardBlockHeader.Hash().Bytes(), crossLinks[crossLinkIndex].HashF.Bytes()) {
 		return sdkerrors.Wrapf(
 			clienttypes.ErrInvalidHeader,
-			"unexpected shard header: expected=%v actual=%v", shardHeader.Hash().Hex(), crossLinks[crossLinkIndex].HashF.Hex())
+			"unexpected shard hash for crosslink: expected=%v actual=%v", crossLinks[crossLinkIndex].HashF.Hex(), shardHeader.Hash().Hex())
 	}
 	return nil
 }

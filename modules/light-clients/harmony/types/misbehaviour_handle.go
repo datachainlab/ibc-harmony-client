@@ -88,10 +88,10 @@ func (cs ClientState) CheckBeaconMisbehaviour(
 		return sdkerrors.Wrapf(err, "could not get epoch state for Header2 at Epoch: %d", header1.Epoch())
 	}
 	// Verify that each is a valid beacon header with sufficient signatures
-	if err := verifyCommitSig(header1, epochState1.GetCommittee(), bh1.CommitSig, bh1.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(header1, epochState1.GetCommittee(), bh1.CommitSig, bh1.CommitBitmap); err != nil {
 		return sdkerrors.Wrap(err, "failed to verify committee signature of Header1")
 	}
-	if err := verifyCommitSig(header2, epochState2.GetCommittee(), bh2.CommitSig, bh2.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(header2, epochState2.GetCommittee(), bh2.CommitSig, bh2.CommitBitmap); err != nil {
 		return sdkerrors.Wrap(err, "failed to verify committee signature of Header2")
 	}
 	return nil
@@ -168,10 +168,10 @@ func (cs ClientState) CheckShardMisbehaviour(
 	if err != nil {
 		return sdkerrors.Wrapf(err, "could not get epoch state for Header2 at Epoch: %d", beaconHeader2.Epoch())
 	}
-	if err := verifyCommitSig(beaconHeader1, epochState1.GetCommittee(), bh1.CommitSig, bh1.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(beaconHeader1, epochState1.GetCommittee(), bh1.CommitSig, bh1.CommitBitmap); err != nil {
 		return sdkerrors.Wrap(err, "failed to verify committee signature of Header1")
 	}
-	if err := verifyCommitSig(beaconHeader2, epochState2.GetCommittee(), bh2.CommitSig, bh2.CommitBitmap); err != nil {
+	if err := VerifyCommitSig(beaconHeader2, epochState2.GetCommittee(), bh2.CommitSig, bh2.CommitBitmap); err != nil {
 		return sdkerrors.Wrap(err, "failed to verify committee signature of Header2")
 	}
 	return nil
