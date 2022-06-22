@@ -28,8 +28,12 @@ import (
 	"github.com/harmony-one/harmony/shard"
 )
 
-// We make an presumption that it is after StakingEpoch.
-const isStaking = true
+const (
+	// We make an presumption that it is after StakingEpoch.
+	isStaking = true
+
+	beaconShardId = 0
+)
 
 var _ exported.ClientState = (*ClientState)(nil)
 
@@ -312,6 +316,10 @@ func (cs *ClientState) updateEpochOnly(
 	if err != nil {
 		return err
 	}
+	if beaconHeader.ShardID() != beaconShardId {
+		return sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", beaconShardId)
+	}
 	epoch := beaconHeader.Epoch().Uint64()
 	if epoch < cs.LatestEpoch {
 		return sdkerrors.Wrapf(
@@ -355,12 +363,20 @@ func (cs *ClientState) update(
 	if err != nil {
 		return nil, nil, err
 	}
+	if beaconHeader.ShardID() != beaconShardId {
+		return nil, nil, sdkerrors.Wrapf(
+			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", beaconShardId)
+	}
 
 	var targetHeader *v3.Header
 	if len(header.ShardHeader) > 0 {
 		shardHeader, err := rlpDecodeHeader(header.ShardHeader)
 		if err != nil {
 			return nil, nil, err
+		}
+		if shardHeader.ShardID() != cs.ShardId {
+			return nil, nil, sdkerrors.Wrapf(
+				clienttypes.ErrInvalidHeader, "target shard id must be %d", cs.ShardId)
 		}
 		if err := checkCrossLink(shardHeader, beaconHeader, header.CrossLinkIndex); err != nil {
 			return nil, nil, err
