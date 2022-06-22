@@ -121,14 +121,13 @@ func (cs ClientState) CheckHeaderAndUpdateState(
 			clienttypes.ErrInvalidHeader, "expected type %T, got %T", &Header{}, header,
 		)
 	}
-	// Update epoch(s) except for the last beacon header
-	bhLen := len(h.BeaconHeaders)
-	for _, bh := range h.BeaconHeaders[:bhLen-1] {
+	// Update epoch(s) before verifying the last beacon header
+	for _, bh := range h.EpochHeaders {
 		if err := cs.updateEpochOnly(ctx, cdc, clientStore, &bh); err != nil {
 			return nil, nil, err
 		}
 	}
-	return cs.update(ctx, cdc, clientStore, h, &h.BeaconHeaders[bhLen-1])
+	return cs.update(ctx, cdc, clientStore, h, h.BeaconHeader)
 }
 
 // Future work is needed
@@ -316,9 +315,9 @@ func (cs *ClientState) updateEpochOnly(
 	if err != nil {
 		return err
 	}
-	if beaconHeader.ShardID() != beaconShardId {
+	if beaconHeader.ShardID() != shard.BeaconChainShardID {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", beaconShardId)
+			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", shard.BeaconChainShardID)
 	}
 	epoch := beaconHeader.Epoch().Uint64()
 	if epoch < cs.LatestEpoch {
@@ -363,9 +362,9 @@ func (cs *ClientState) update(
 	if err != nil {
 		return nil, nil, err
 	}
-	if beaconHeader.ShardID() != beaconShardId {
+	if beaconHeader.ShardID() != shard.BeaconChainShardID {
 		return nil, nil, sdkerrors.Wrapf(
-			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", beaconShardId)
+			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", shard.BeaconChainShardID)
 	}
 
 	var targetHeader *v3.Header
@@ -472,7 +471,7 @@ func VerifyCommitSig(
 		return err
 	}
 	blockHeader := block.Header{Header: beaconHeader}
-	payload := ConstructCommitPayload(epoch, blockHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
+	payload := ConstructCommitPayload(blockHeader.Hash(), beaconHeader.Number().Uint64(), beaconHeader.ViewID().Uint64())
 	if !aggSig.VerifyHash(mask.AggregatePublic, payload) {
 		return sdkerrors.Wrap(ErrInvalidSignature, "failed to verify the multi signature")
 	}

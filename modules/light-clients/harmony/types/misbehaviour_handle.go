@@ -48,9 +48,8 @@ func (cs ClientState) CheckBeaconMisbehaviour(
 	clientStore sdk.KVStore,
 	misbehaviour *Misbehaviour,
 ) error {
-	// misbehaviour.ValidateBasic() checks that each misbehaviour header has just one beacon header
-	bh1 := misbehaviour.Header1.BeaconHeaders[0]
-	bh2 := misbehaviour.Header2.BeaconHeaders[0]
+	bh1 := misbehaviour.Header1.BeaconHeader
+	bh2 := misbehaviour.Header2.BeaconHeader
 	header1, err := rlpDecodeHeader(bh1.Header)
 	if err != nil {
 		return sdkerrors.Wrap(err, "could not decode beacon header of Header1")
@@ -142,8 +141,8 @@ func (cs ClientState) CheckShardMisbehaviour(
 		return err
 	}
 
-	bh1 := misbehaviour.Header1.BeaconHeaders[0]
-	bh2 := misbehaviour.Header2.BeaconHeaders[0]
+	bh1 := misbehaviour.Header1.BeaconHeader
+	bh2 := misbehaviour.Header2.BeaconHeader
 	beaconHeader1, err := rlpDecodeHeader(bh1.Header)
 	if err != nil {
 		return sdkerrors.Wrap(err, "could not decode beacon header of Header1")

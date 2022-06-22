@@ -61,25 +61,22 @@ func (misbehaviour Misbehaviour) ValidateBasic() error {
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Header1 height is not as same as Header2 height (%s != %s)", misbehaviour.Header1.GetHeight(), misbehaviour.Header2.GetHeight())
 	}
 
-	// Check that each misbehaviour header has only one beacon header
-	// beacon: target header
-	// shard:  header with the cross link for the target shard header
-	if len(misbehaviour.Header1.BeaconHeaders) != 1 {
+	// Check that each misbehaviour header has no epoch header
+	// because it is unnecessary to construct a misbehaviour.
+	if len(misbehaviour.Header1.EpochHeaders) != 0 {
 		return sdkerrors.Wrap(
-			clienttypes.ErrInvalidMisbehaviour, "Misbehaviour Header1 has multiple beacon headers")
+			clienttypes.ErrInvalidMisbehaviour, "Header1 with epoch headers cannot be accepted")
 	}
-	if len(misbehaviour.Header2.BeaconHeaders) != 1 {
+	if len(misbehaviour.Header2.EpochHeaders) != 0 {
 		return sdkerrors.Wrap(
-			clienttypes.ErrInvalidMisbehaviour, "Misbehaviour Header2 has multiple beacon headers")
+			clienttypes.ErrInvalidMisbehaviour, "Header2 with epoch headers cannot be accepted")
 	}
 
-	h1Beacon := misbehaviour.Header1.BeaconHeaders[0]
-	h2Beacon := misbehaviour.Header2.BeaconHeaders[0]
-	h1BeaconHeader, err := rlpDecodeHeader(h1Beacon.Header)
+	h1BeaconHeader, err := rlpDecodeHeader(misbehaviour.Header1.BeaconHeader.Header)
 	if err != nil {
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Invalid Header1")
 	}
-	h2BeaconHeader, err := rlpDecodeHeader(h2Beacon.Header)
+	h2BeaconHeader, err := rlpDecodeHeader(misbehaviour.Header2.BeaconHeader.Header)
 	if err != nil {
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Invalid Header2")
 	}
@@ -91,7 +88,7 @@ func (misbehaviour Misbehaviour) ValidateBasic() error {
 	}
 
 	// misbehaviour signatures cannot be identical
-	if bytes.Equal(h1Beacon.CommitSig, h2Beacon.CommitSig) {
+	if bytes.Equal(misbehaviour.Header1.BeaconHeader.CommitSig, misbehaviour.Header2.BeaconHeader.CommitSig) {
 		return sdkerrors.Wrap(clienttypes.ErrInvalidMisbehaviour, "misbehaviour signatures cannot be equal")
 	}
 

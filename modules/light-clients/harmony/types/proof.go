@@ -2,7 +2,7 @@ package types
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/ethereum/go-ethereum/common"
@@ -96,7 +96,7 @@ func (m *MemDB) Get(key []byte) ([]byte, error) {
 	h := common.BytesToHash(key)
 	value, ok := m.kvs[h]
 	if !ok {
-		return nil, fmt.Errorf("key not found")
+		return nil, errors.New("key not found")
 	}
 	return value, nil
 }

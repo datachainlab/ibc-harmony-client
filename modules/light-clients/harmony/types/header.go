@@ -27,7 +27,7 @@ func (h Header) GetHeight() exported.Height {
 }
 
 func (h Header) ValidateBasic() error {
-	if len(h.BeaconHeaders) == 0 {
+	if h.BeaconHeader == nil {
 		return errors.New("beacon header cannot be empty")
 	}
 	if len(h.ShardHeader) > 0 {
@@ -53,7 +53,7 @@ func (h Header) GetEpoch() *big.Int {
 
 // GetEpoch returns the last beacon epoch
 func (h Header) GetBeaconEpoch() *big.Int {
-	header, err := rlpDecodeHeader(h.BeaconHeaders[len(h.BeaconHeaders)-1].Header)
+	header, err := rlpDecodeHeader(h.BeaconHeader.Header)
 	if err != nil {
 		panic(err)
 	}
@@ -69,7 +69,7 @@ func (h Header) decode() (*v3.Header, error) {
 			return nil, err
 		}
 	} else {
-		header, err = rlpDecodeHeader(h.BeaconHeaders[len(h.BeaconHeaders)-1].Header)
+		header, err = rlpDecodeHeader(h.BeaconHeader.Header)
 		if err != nil {
 			return nil, err
 		}
