@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/cosmos/ibc-go/modules/core/exported"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -31,7 +32,7 @@ func ClientCommitmentKey(clientId string) ([]byte, error) {
 	return keccak256AbiEncodePacked(clientPrefix, clientId)
 }
 
-func ConsensusCommitmentKey(clientId string, height uint64) ([]byte, error) {
+func ConsensusCommitmentKey(clientId string, height exported.Height) ([]byte, error) {
 	return keccak256AbiEncodePacked(consensusStatePrefix, clientId, "/", height)
 }
 
@@ -61,7 +62,7 @@ func ClientStateCommitmentSlot(clientId string) ([]byte, error) {
 	return keccak256AbiEncodePacked(k, commitmentSlot)
 }
 
-func ConsensusStateCommitmentSlot(clientId string, height uint64) ([]byte, error) {
+func ConsensusStateCommitmentSlot(clientId string, height exported.Height) ([]byte, error) {
 	k, err := ConsensusCommitmentKey(clientId, height)
 	if err != nil {
 		return nil, err
@@ -138,6 +139,10 @@ func keccak256AbiEncodePacked(data ...interface{}) ([]byte, error) {
 			bz = vt.Bytes()[:]
 		case []byte:
 			bz = common.RightPadBytes(vt, len(vt))
+		case exported.Height:
+			val := big.NewInt(0).Lsh(big.NewInt(0).SetUint64(vt.GetRevisionNumber()), 64)
+			val = val.Add(val, big.NewInt(0).SetUint64(vt.GetRevisionHeight()))
+			bz = common.LeftPadBytes(val.Bytes(), 16)
 		default:
 			return nil, fmt.Errorf("unsupported type for abiEncodePacked: %s", reflect.TypeOf(v))
 		}

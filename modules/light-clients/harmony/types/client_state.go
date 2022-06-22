@@ -189,7 +189,7 @@ func (cs ClientState) VerifyClientConsensusState(store sdk.KVStore, cdc codec.Bi
 	}
 
 	root := common.BytesToHash(provingConsensusState.Root)
-	slot, err := ConsensusStateCommitmentSlot(counterpartyClientIdentifier, consensusHeight.GetRevisionHeight())
+	slot, err := ConsensusStateCommitmentSlot(counterpartyClientIdentifier, consensusHeight)
 	if err != nil {
 		return err
 	}
