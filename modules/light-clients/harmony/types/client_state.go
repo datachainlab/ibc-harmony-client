@@ -110,7 +110,11 @@ func (cs ClientState) ExportMetadata(_ sdk.KVStore) []exported.GenesisMetadata {
 	return nil
 }
 
-// Update and Misbehaviour functions
+// CheckHeaderAndUpdateState verifies that:
+// - the beacon header with the associated committee signature and bitmap. It also verifies the quorum using the committee of the target epoch.
+// - (for shard 1+) the shard header with the cross-link of the beacon header.
+// If the target header's epoch is older than the epoch of ClientState,
+// `header` must have "epoch header(s)", which is/are the last beacon header(s) of each epoch for updating epoch of ClientState.
 func (cs ClientState) CheckHeaderAndUpdateState(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	header exported.Header,
@@ -307,6 +311,8 @@ func (cs *ClientState) SetCommittee(committee *shard.Committee) {
 	cs.LatestCommittee = bz
 }
 
+// updateEpochOnly updates the epoch of ClientState using the last beacon headers of each epoch
+// between the ClientState and the target header.
 func (cs *ClientState) updateEpochOnly(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	beacon *BeaconHeader,
@@ -325,6 +331,7 @@ func (cs *ClientState) updateEpochOnly(
 			clienttypes.ErrInvalidHeader, "beacon epoch %d < latest epoch %d", epoch, cs.LatestEpoch,
 		)
 	}
+	// Get the target epoch committee for verifying the aggregated signature for the header
 	epochState, err := GetEpochState(clientStore, cdc, epoch)
 	if err != nil {
 		return err
@@ -334,6 +341,7 @@ func (cs *ClientState) updateEpochOnly(
 		return err
 	}
 
+	// Ensure the header is the last header for an epoch
 	if len(beaconHeader.ShardState()) == 0 {
 		return sdkerrors.Wrap(
 			clienttypes.ErrInvalidHeader, "beacon headers except the last one must have shard state")
@@ -349,10 +357,12 @@ func (cs *ClientState) updateEpochOnly(
 	}
 	cs.LatestEpoch += 1
 	cs.SetCommittee(newCommitee)
+	// Store for use in header validation of the same epoch
 	SetEpochState(clientStore, cdc, &EpochState{Committee: cs.LatestCommittee}, cs.LatestEpoch)
 	return nil
 }
 
+// update verifies the target header and updates the height of ClientState.
 func (cs *ClientState) update(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	header *Header,
@@ -368,7 +378,13 @@ func (cs *ClientState) update(
 	}
 
 	var targetHeader *v3.Header
-	if len(header.ShardHeader) > 0 {
+	// If shard id is non-zero, Header has a shard header.
+	// Verify that the cross-link corresponding to the shard header is present in the beacon header submitted with it.
+	if cs.ShardId() != 0 {
+		if len(header.ShardHeader) == 0 {
+			return nil, nil, sdkerrors.Wrapf(
+				clienttypes.ErrInvalidHeader, "shard header cannot be nil")
+		}
 		shardHeader, err := rlpDecodeHeader(header.ShardHeader)
 		if err != nil {
 			return nil, nil, err
@@ -385,6 +401,7 @@ func (cs *ClientState) update(
 		targetHeader = beaconHeader
 	}
 
+	// Verify the account proof for the target contract address and get the storage root
 	proof, err := header.GetAccountProof()
 	if err != nil {
 		return nil, nil, err
@@ -398,6 +415,7 @@ func (cs *ClientState) update(
 		return nil, nil, err
 	}
 
+	// Verify the beacon header with aggregated signature of the committee for the latest epoch of ClientState.
 	epoch := beaconHeader.Epoch().Uint64()
 	if cs.LatestEpoch != epoch {
 		return nil, nil, sdkerrors.Wrapf(
@@ -408,7 +426,6 @@ func (cs *ClientState) update(
 		return nil, nil, err
 	}
 	committee := epochState.GetCommittee()
-	// Verify the sig is sufficient by the beacon committee of the current epoch
 	if err := VerifyCommitSig(beaconHeader, committee, beacon.CommitSig, beacon.CommitBitmap); err != nil {
 		return nil, nil, err
 	}
