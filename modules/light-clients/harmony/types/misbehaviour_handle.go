@@ -17,10 +17,7 @@ import (
 // CheckMisbehaviourAndUpdateState detects the following as Misbehaviour:
 //
 // 1. The existence of two different valid beacon headers for the same beacon block number
-//   - This method validates each header with the aggregated signature and its bitmap of the committee for the respective epoch.
-// 2. Two different valid shard headers for the same shard ID and block number:
-//   - Both shard headers assume the existence of a corresponding beacon header with a valid cross-link;
-//     a shard header without a cross-link is invalid in Harmony, and this light client does not accept it.
+// 2. The existence of two different valid shard headers for the same shard ID and block number:
 func (cs ClientState) CheckMisbehaviourAndUpdateState(
 	ctx sdk.Context,
 	cdc codec.BinaryCodec,
@@ -63,7 +60,8 @@ func (cs ClientState) CheckMisbehaviourAndUpdateState(
 	return &cs, nil
 }
 
-// Common for beacon and shard
+// CheckBeaconMisbehaviour checks the existence of two different valid beacon headers for the same beacon block number.
+// It validates each header with the aggregated signature and its bitmap of the committee for the respective epoch.
 func (cs ClientState) CheckBeaconMisbehaviour(
 	ctx sdk.Context,
 	cdc codec.BinaryCodec,
@@ -124,6 +122,8 @@ func (cs ClientState) CheckBeaconMisbehaviour(
 }
 
 // CheckShardMisbehaviour checks for a case where two shard headers with the same block number are submitted
+// Both shard headers assume the existence of a corresponding beacon header with a valid cross-link;
+// a shard header without a cross-link is invalid in Harmony, and this light client does not accept it.
 func (cs ClientState) CheckShardMisbehaviour(
 	ctx sdk.Context,
 	cdc codec.BinaryCodec,

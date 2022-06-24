@@ -50,15 +50,6 @@ func (misbehaviour Misbehaviour) ValidateBasic() error {
 		)
 	}
 
-	// Ensure that Height1 epoch is equal to Height2
-	if misbehaviour.Header1.GetEpoch().Cmp(misbehaviour.Header2.GetEpoch()) != 0 {
-		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Header1 epoch is not as same as Header2 epoch (%s != %s)", misbehaviour.Header1.GetEpoch(), misbehaviour.Header2.GetEpoch())
-	}
-	// Ensure that Height1 height is equal to Height2
-	if !misbehaviour.Header1.GetHeight().EQ(misbehaviour.Header2.GetHeight()) {
-		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Header1 height is not as same as Header2 height (%s != %s)", misbehaviour.Header1.GetHeight(), misbehaviour.Header2.GetHeight())
-	}
-
 	// Check that each misbehaviour header has no epoch header
 	// because it is unnecessary to construct a misbehaviour.
 	if len(misbehaviour.Header1.EpochHeaders) != 0 {
