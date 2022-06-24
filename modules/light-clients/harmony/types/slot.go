@@ -18,12 +18,14 @@ import (
 var commitmentSlot = big.NewInt(0)
 
 const (
-	clientPrefix         = uint8(0)
-	consensusStatePrefix = uint8(1)
-	connectionPrefix     = uint8(2)
-	channelPrefix        = uint8(3)
-	packetPrefix         = uint8(4)
-	packetAckPrefix      = uint8(5)
+	clientPrefix           = uint8(0)
+	consensusStatePrefix   = uint8(1)
+	connectionPrefix       = uint8(2)
+	channelPrefix          = uint8(3)
+	packetPrefix           = uint8(4)
+	packetAckPrefix        = uint8(5)
+	packetReceiptPrefix    = uint8(6)
+	nextSequenceRecvPrefix = uint8(7)
 )
 
 // Commitment key generator
@@ -50,6 +52,14 @@ func PacketCommitmentKey(portId, channelId string, sequence uint64) ([]byte, err
 
 func PacketAcknowledgementCommitmentKey(portId, channelId string, sequence uint64) ([]byte, error) {
 	return keccak256AbiEncodePacked(packetAckPrefix, portId, "/", channelId, "/", sequence)
+}
+
+func PacketReceiptCommitmentKey(portId, channelId string, sequence uint64) ([]byte, error) {
+	return keccak256AbiEncodePacked(packetReceiptPrefix, portId, "/", channelId, "/", sequence)
+}
+
+func NextSequenceRecvCommitmentKey(portId, channelId string) ([]byte, error) {
+	return keccak256AbiEncodePacked(nextSequenceRecvPrefix, portId, "/", channelId)
 }
 
 // Slot calculator
@@ -96,6 +106,22 @@ func PacketCommitmentSlot(portId, channelId string, sequence uint64) ([]byte, er
 
 func PacketAcknowledgementCommitmentSlot(portId, channelId string, sequence uint64) ([]byte, error) {
 	k, err := PacketAcknowledgementCommitmentKey(portId, channelId, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return keccak256AbiEncodePacked(k, commitmentSlot)
+}
+
+func PacketReceiptCommitmentSlot(portId, channelId string, sequence uint64) ([]byte, error) {
+	k, err := PacketReceiptCommitmentKey(portId, channelId, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return keccak256AbiEncodePacked(k, commitmentSlot)
+}
+
+func NextSequenceRecvCommitmentSlot(portId, channelId string) ([]byte, error) {
+	k, err := NextSequenceRecvCommitmentKey(portId, channelId)
 	if err != nil {
 		return nil, err
 	}

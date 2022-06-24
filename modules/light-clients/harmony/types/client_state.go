@@ -288,11 +288,31 @@ func (cs ClientState) VerifyPacketAcknowledgement(ctx sdk.Context, store sdk.KVS
 }
 
 func (cs ClientState) VerifyPacketReceiptAbsence(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, sequence uint64) error {
-	return sdkerrors.Wrap(clienttypes.ErrFailedPacketReceiptVerification, "not supported")
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := PacketReceiptCommitmentSlot(portID, channelID, sequence)
+	if err != nil {
+		return err
+	}
+	// verify non-membership
+	return VerifyStorageProof(root, slot, nil, merkleProof)
 }
 
 func (cs ClientState) VerifyNextSequenceRecv(ctx sdk.Context, store sdk.KVStore, cdc codec.BinaryCodec, height exported.Height, delayTimePeriod uint64, delayBlockPeriod uint64, prefix exported.Prefix, proof []byte, portID string, channelID string, nextSequenceRecv uint64) error {
-	return sdkerrors.Wrap(clienttypes.ErrFailedNextSeqRecvVerification, "not supported")
+	merkleProof, consensusState, err := produceVerificationArgs(store, cdc, cs, height, prefix, proof)
+	if err != nil {
+		return err
+	}
+	root := common.BytesToHash(consensusState.Root)
+	slot, err := NextSequenceRecvCommitmentSlot(portID, channelID)
+	if err != nil {
+		return err
+	}
+	bz := sdk.Uint64ToBigEndian(nextSequenceRecv)
+	return VerifyStorageProof(root, slot, bz, merkleProof)
 }
 
 func (cs ClientState) GetCommittee() *shard.Committee {
@@ -380,7 +400,7 @@ func (cs *ClientState) update(
 	var targetHeader *v3.Header
 	// If shard id is non-zero, Header has a shard header.
 	// Verify that the cross-link corresponding to the shard header is present in the beacon header submitted with it.
-	if cs.ShardId() != 0 {
+	if cs.ShardId != shard.BeaconChainShardID {
 		if len(header.ShardHeader) == 0 {
 			return nil, nil, sdkerrors.Wrapf(
 				clienttypes.ErrInvalidHeader, "shard header cannot be nil")
@@ -496,9 +516,9 @@ func VerifyCommitSig(
 }
 
 func lookupBeaconCommittee(shards []shard.Committee) (*shard.Committee, bool) {
-	for _, shard := range shards {
-		if shard.ShardID == 0 {
-			return &shard, true
+	for _, s := range shards {
+		if s.ShardID == shard.BeaconChainShardID {
+			return &s, true
 		}
 	}
 	return nil, false
