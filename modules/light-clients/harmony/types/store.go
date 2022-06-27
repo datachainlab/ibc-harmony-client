@@ -43,6 +43,7 @@ func GetConsensusState(store sdk.KVStore, cdc codec.BinaryCodec, height exported
 	return consensusState, nil
 }
 
+// SetEpochState stores the epoch state at the given epoch.
 func SetEpochState(clientStore sdk.KVStore, cdc codec.BinaryCodec, epochState *EpochState, epoch uint64) {
 	bz, err := cdc.Marshal(epochState)
 	if err != nil {
@@ -51,6 +52,8 @@ func SetEpochState(clientStore sdk.KVStore, cdc codec.BinaryCodec, epochState *E
 	clientStore.Set(EpochStateKey(epoch), bz)
 }
 
+// GetEpochState retrieves the `epoch` state from the client prefixed
+// store. An error is returned if the epoch state does not exist.
 func GetEpochState(clientStore sdk.KVStore, cdc codec.BinaryCodec, epoch uint64) (*EpochState, error) {
 	bz := clientStore.Get(EpochStateKey(epoch))
 	if bz == nil {

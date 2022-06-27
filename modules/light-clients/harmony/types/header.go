@@ -2,14 +2,13 @@ package types
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
+	"math/big"
 
 	clienttypes "github.com/cosmos/ibc-go/modules/core/02-client/types"
 	"github.com/cosmos/ibc-go/modules/core/exported"
 	"github.com/ethereum/go-ethereum/rlp"
-	bls_core "github.com/harmony-one/bls/ffi/go/bls"
 	v3 "github.com/harmony-one/harmony/block/v3"
-	"github.com/harmony-one/harmony/crypto/bls"
 )
 
 var _ exported.Header = (*Header)(nil)
@@ -18,8 +17,9 @@ func (h Header) ClientType() string {
 	return HarmonyClient
 }
 
+// GetHeight returns the target height
 func (h Header) GetHeight() exported.Height {
-	header, err := rlpDecodeHeader(h.ShardHeader)
+	header, err := h.decode()
 	if err != nil {
 		panic(err)
 	}
@@ -27,22 +27,54 @@ func (h Header) GetHeight() exported.Height {
 }
 
 func (h Header) ValidateBasic() error {
-	if l := len(h.Signature); l != bls.BLSSignatureSizeInBytes {
-		return fmt.Errorf("invalid signature length %v", l)
+	if h.BeaconHeader == nil {
+		return errors.New("beacon header cannot be empty")
+	}
+	if len(h.ShardHeader) > 0 {
+		if len(h.AccountProof) == 0 {
+			return errors.New("AccountProof is empty")
+		}
 	}
 	return nil
 }
 
-func (h Header) GetSignature() (*bls_core.Sign, error) {
-	var sign bls_core.Sign
-	if err := sign.Deserialize(h.Signature); err != nil {
-		return nil, err
-	}
-	return &sign, nil
-}
-
 func (h Header) GetAccountProof() ([][]byte, error) {
 	return decodeRLP(h.AccountProof)
+}
+
+// GetEpoch returns the target epoch
+func (h Header) GetEpoch() *big.Int {
+	header, err := h.decode()
+	if err != nil {
+		panic(err)
+	}
+	return header.Epoch()
+}
+
+// GetEpoch returns the last beacon epoch
+func (h Header) GetBeaconEpoch() *big.Int {
+	header, err := rlpDecodeHeader(h.BeaconHeader.Header)
+	if err != nil {
+		panic(err)
+	}
+	return header.Epoch()
+}
+
+func (h Header) decode() (*v3.Header, error) {
+	var header *v3.Header
+	var err error
+	if len(h.ShardHeader) > 0 {
+		header, err = rlpDecodeHeader(h.ShardHeader)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		header, err = rlpDecodeHeader(h.BeaconHeader.Header)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return header, nil
 }
 
 func rlpDecodeHeader(bz []byte) (*v3.Header, error) {
