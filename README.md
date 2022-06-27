@@ -1,6 +1,6 @@
 # ibc-harmony-client
 
-IBC Harmony client is an IBC Client ([ICS-02](https://www.harmony.one/)) for validating [Harmony](https://www.harmony.one/) [FBFT](https://docs.harmony.one/home/general/technology/consensus).
+IBC Harmony client is an IBC Client ([ICS-02](https://github.com/cosmos/ibc/tree/master/spec/core/ics-002-client-semantics))) for validating [Harmony](https://www.harmony.one/) [FBFT](https://docs.harmony.one/home/general/technology/consensus).
 
 This project is under development.
 
@@ -14,6 +14,7 @@ We presume the following:
 ## Requirements
 
  We use the core contracts of [yui-ibc-solidity](https://github.com/hyperledger-labs/yui-ibc-solidity), which provides an IBC implementation in solidity on a target shard chain of Harmony.
+
 ## Overview
 
 The client verifies a target shard header submitted and tracks its states for IBC such as the account roots with the height of the contract, the committees of each epoch, etc.
