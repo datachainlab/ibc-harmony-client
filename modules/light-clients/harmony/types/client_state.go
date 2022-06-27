@@ -331,8 +331,8 @@ func (cs *ClientState) SetCommittee(committee *shard.Committee) {
 	cs.LatestCommittee = bz
 }
 
-// updateEpochOnly updates the epoch of ClientState using the last beacon headers of each epoch
-// between the ClientState and the target header.
+// updateEpochOnly increases the epoch of ClientState by one
+// using the last beacon header of the same epoch.
 func (cs *ClientState) updateEpochOnly(
 	ctx sdk.Context, cdc codec.BinaryCodec, clientStore sdk.KVStore,
 	beacon *BeaconHeader,
@@ -346,9 +346,9 @@ func (cs *ClientState) updateEpochOnly(
 			clienttypes.ErrInvalidHeader, "beacon shard id must be %d", shard.BeaconChainShardID)
 	}
 	epoch := beaconHeader.Epoch().Uint64()
-	if epoch < cs.LatestEpoch {
+	if epoch != cs.LatestEpoch {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidHeader, "beacon epoch %d < latest epoch %d", epoch, cs.LatestEpoch,
+			clienttypes.ErrInvalidHeader, "beacon epoch %d != latest epoch %d", epoch, cs.LatestEpoch,
 		)
 	}
 	// Get the target epoch committee for verifying the aggregated signature for the header
