@@ -121,7 +121,7 @@ func (cs ClientState) CheckBeaconMisbehaviour(
 	return nil
 }
 
-// CheckShardMisbehaviour checks for a case where two shard headers with the same block number are submitted
+// CheckShardMisbehaviour checks for a case where two different shard headers with the same block number are submitted.
 // Both shard headers assume the existence of a corresponding beacon header with a valid cross-link;
 // a shard header without a cross-link is invalid in Harmony, and this light client does not accept it.
 func (cs ClientState) CheckShardMisbehaviour(
@@ -154,6 +154,12 @@ func (cs ClientState) CheckShardMisbehaviour(
 	if shardHeader1.Number().Cmp(shardHeader2.Number()) != 0 {
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Header1 height is not as same as Header2 height (%s != %s)", shardHeader1.Number(), shardHeader2.Number())
 	}
+	// Check that both shard header is different
+	b1 := block.Header{Header: shardHeader1}
+	b2 := block.Header{Header: shardHeader2}
+	if bytes.Equal(b1.Hash().Bytes(), b2.Hash().Bytes()) {
+		return sdkerrors.Wrap(clienttypes.ErrInvalidMisbehaviour, "shard header hashes are equal")
+	}
 
 	// Check that both target headers are not too old to verify
 	currentTimestamp := ctx.BlockTime()
@@ -164,6 +170,7 @@ func (cs ClientState) CheckShardMisbehaviour(
 		return err
 	}
 
+	// Beacon headers are used to check that shard headers are valid for harmony chain
 	bh1 := misbehaviour.Header1.BeaconHeader
 	bh2 := misbehaviour.Header2.BeaconHeader
 	beaconHeader1, err := rlpDecodeHeader(bh1.Header)
@@ -182,7 +189,8 @@ func (cs ClientState) CheckShardMisbehaviour(
 		return sdkerrors.Wrapf(clienttypes.ErrInvalidMisbehaviour, "Header2 beacon header has wrong shard id. expected: %d, got: %d", shard.BeaconChainShardID, beaconHeader2.ShardID())
 	}
 
-	// Check that each cross-link is valid
+	// Check that each cross-link is valid.
+	// The shard headers are different, so the cross-link check will not pass if they are the same beacon header.
 	if err := checkCrossLink(shardHeader1, beaconHeader1, misbehaviour.Header1.CrossLinkIndex); err != nil {
 		return sdkerrors.Wrap(err, "could not verify cross link of Header1")
 	}
@@ -211,7 +219,7 @@ func (cs ClientState) checkTargetShardTimestamp(
 	hmyConsensusState, err := GetConsensusState(clientStore, cdc, height)
 	if err != nil {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidMisbehaviour,
+			err,
 			"could not get consensus state from clientStore for Header%d at Height: %s", headerIndex, height)
 	}
 	if err := checkTimestamp(hmyConsensusState.Timestamp, cs.TrustingPeriod, timestamp); err != nil {
@@ -233,13 +241,13 @@ func (cs ClientState) checkBeaconCommitSig(
 	epochState, err := GetEpochState(clientStore, cdc, header.Epoch().Uint64())
 	if err != nil {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidMisbehaviour,
-			"could not get epoch state for Header%d at Epoch: %d: %w", headerIndex, header.Epoch(), err)
+			err,
+			"could not get epoch state for Header%d at Epoch: %d", headerIndex, header.Epoch())
 	}
 	if err := VerifyCommitSig(header, epochState.GetCommittee(), commitSig, commitBitmap); err != nil {
 		return sdkerrors.Wrapf(
-			clienttypes.ErrInvalidMisbehaviour,
-			"failed to verify committee signature of Header%d: %w", headerIndex, err)
+			err,
+			"failed to verify committee signature of Header %d", headerIndex)
 	}
 	return nil
 }
