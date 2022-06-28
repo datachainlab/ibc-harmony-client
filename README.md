@@ -1,6 +1,6 @@
 # ibc-harmony-client
 
-IBC Harmony client is an IBC Client ([ICS-02](https://github.com/cosmos/ibc/tree/master/spec/core/ics-002-client-semantics))) for validating [Harmony](https://www.harmony.one/) [FBFT](https://docs.harmony.one/home/general/technology/consensus).
+IBC Harmony client is an IBC Client ([ICS-02](https://github.com/cosmos/ibc/tree/master/spec/core/ics-002-client-semantics)) for validating [Harmony](https://www.harmony.one/) [FBFT](https://docs.harmony.one/home/general/technology/consensus).
 
 This project is under development.
 
